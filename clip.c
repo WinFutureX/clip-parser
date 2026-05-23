@@ -18,7 +18,7 @@
 #include <inttypes.h>
 
 /*
- * byte swap to big endian
+ * byte swap from big endian
  * https://stackoverflow.com/questions/3022552/is-there-any-standard-htonl-like-function-for-64-bits-integers-in-c
  */
 #include <arpa/inet.h>
@@ -27,11 +27,13 @@
 
 /*
  * layout:
- * 8 bytes for "CSFCHUNK" magic number
- * 8 bytes for file length
- * 8 bytes for offset (big endian)
- * 8 bytes for "CHNKHead" magic number
- * 48 bytes for unknowns
+ * CSFCHUNK (24 bytes):
+ * - 8 bytes for "CSFCHUNK" magic number
+ * - 8 bytes for file length
+ * - 8 bytes for offset (big endian)
+ * CHNKHead (56 bytes):
+ * - 8 bytes for "CHNKHead" magic number
+ * - 48 bytes for unknowns
  * total 80 bytes (not including mandatory "CHNKExta" data)
  */
 
@@ -47,6 +49,8 @@
 #define FILE_OPEN_MODE "rb"
 #endif
 
+#define CLIP_CHUNK_MAGIC_SIZE 8
+
 typedef enum clip_chunk_type
 {
 	CLIP_CHUNK_UNKNOWN_OR_ERROR,
@@ -57,11 +61,11 @@ typedef enum clip_chunk_type
 	CLIP_CHUNK_CHNKFOOT
 } clip_chunk_type;
 
-static const char * clip_csfchunk_magic = "CSFCHUNK";
-static const char * clip_chnkhead_magic = "CHNKHead";
-static const char * clip_chnkexta_magic = "CHNKExta";
-static const char * clip_chnksqli_magic = "CHNKSQLi";
-static const char * clip_chnkfoot_magic = "CHNKFoot";
+static const char clip_csfchunk_magic[CLIP_CHUNK_MAGIC_SIZE] = "CSFCHUNK";
+static const char clip_chnkhead_magic[CLIP_CHUNK_MAGIC_SIZE] = "CHNKHead";
+static const char clip_chnkexta_magic[CLIP_CHUNK_MAGIC_SIZE] = "CHNKExta";
+static const char clip_chnksqli_magic[CLIP_CHUNK_MAGIC_SIZE] = "CHNKSQLi";
+static const char clip_chnkfoot_magic[CLIP_CHUNK_MAGIC_SIZE] = "CHNKFoot";
 
 /* "BlockDataBeginChunk" */
 const char * clip_chnkexta_chunk_begin = "B\0l\0o\0c\0k\0D\0a\0t\0a\0B\0e\0g\0i\0n\0C\0h\0u\0n\0k\0";
@@ -82,7 +86,7 @@ typedef struct file_info
 typedef struct clip_csfchunk
 {
 	/* magic number, expected to be "CSFCHUNK" */
-	char magic[8];
+	char magic[CLIP_CHUNK_MAGIC_SIZE];
 	/* the file size */
 	uint64_t length;
 	/* expected offset to CHNKHead? */
@@ -93,7 +97,7 @@ typedef struct clip_csfchunk
 typedef struct clip_chnkhead
 {
 	/* magic number, expected to be "CHNKHead" */
-	char magic[8];
+	char magic[CLIP_CHUNK_MAGIC_SIZE];
 	/* possibly length? */
 	uint64_t unknown_0;
 	uint64_t unknown_1;
@@ -105,7 +109,7 @@ typedef struct clip_chnkhead
 typedef struct clip_chnkexta_base
 {
 	/* magic number, expected to be "CHNKExta" */
-	char magic[8];
+	char magic[CLIP_CHUNK_MAGIC_SIZE];
 	/* data size */
 	uint64_t size;
 } clip_chnkexta_base;
@@ -121,7 +125,7 @@ typedef struct clip_chnkexta
 typedef struct clip_chnksqli_base
 {
 	/* magic number, expected to be "CHNKSQLi" */
-	char magic[8];
+	char magic[CLIP_CHUNK_MAGIC_SIZE];
 	/* data size */
 	uint64_t size;
 } clip_chnksqli_base;
@@ -138,14 +142,13 @@ typedef struct clip_chnksqli
 typedef struct clip_chnkfoot
 {
 	/* magic number, expected to be "CHNKFoot" */
-	char magic[8];
+	char magic[CLIP_CHUNK_MAGIC_SIZE];
 	/* seems to be always 0 */
 	uint64_t unknown;
 } clip_chnkfoot;
 
 static void dump_bytes(const uint8_t * bytes, size_t count)
 {
-#if NO_DUMP_BYTES != 1
 	size_t i;
 	for (i = 0; i < count; i++)
 	{
@@ -163,7 +166,6 @@ static void dump_bytes(const uint8_t * bytes, size_t count)
 		}
 	}
 	printf("\n");
-#endif
 }
 
 static file_info * file_open(const FILE_NAME_TYPE * filename)
@@ -206,7 +208,7 @@ static void file_close(file_info * file)
 
 static clip_chunk_type detect_chunk(file_info * file)
 {
-	char tmp[8];
+	char tmp[CLIP_CHUNK_MAGIC_SIZE];
 	long prev_offset;
 	clip_chunk_type ret = CLIP_CHUNK_UNKNOWN_OR_ERROR;
 	if (!file)
@@ -327,7 +329,7 @@ static void parse_clip_chnkhead(clip_chnkhead * chnkhead)
 	printf("CHNKHead unknown 1 0x%" PRIX64 "\n", chnkhead->unknown_1);
 	printf("CHNKHead unknown 2 0x%" PRIX64 "\n", chnkhead->unknown_2);
 	printf("CHNKHead unknown 3 0x%" PRIX64 "\n", chnkhead->unknown_3);
-	printf("CHNKHead byte array (16 bytes)\n");
+	printf("CHNKHead byte array:\n");
 	dump_bytes(chnkhead->unknown, sizeof(chnkhead->unknown));
 }
 
@@ -386,7 +388,9 @@ static void free_clip_chnkexta(clip_chnkexta * chnkexta)
 static void parse_clip_chnkexta(clip_chnkexta * chnkexta)
 {
 	printf("CHNKExta length %" PRIu64 " (0x%"PRIX64")\n", chnkexta->base.size, chnkexta->base.size);
+#if NO_DUMP_BYTES != 1
 	dump_bytes(chnkexta->data, chnkexta->base.size);
+#endif
 }
 
 static clip_chnksqli * alloc_clip_chnksqli(file_info * file)
@@ -444,7 +448,9 @@ static void free_clip_chnksqli(clip_chnksqli * chnksqli)
 static void parse_clip_chnksqli(clip_chnksqli * chnksqli)
 {
 	printf("CHNKSQLi length %" PRIu64 " (0x%"PRIX64")\n", chnksqli->base.size, chnksqli->base.size);
+#if NO_DUMP_BYTES != 1
 	dump_bytes(chnksqli->data, chnksqli->base.size);
+#endif
 }
 
 static clip_chnkfoot * alloc_clip_chnkfoot(file_info * file)
@@ -514,6 +520,7 @@ int main(int argc, char ** argv)
 			printf("end of file reached\n");
 			break;
 		}
+		printf("current offset 0x%lX\n", offset);
 		switch (detect_chunk(file))
 		{
 			case CLIP_CHUNK_CSFCHUNK:
@@ -587,7 +594,7 @@ int main(int argc, char ** argv)
 				}
 				break;
 			default:
-				fprintf(stderr, "unknown chunk or chunk detection error at offset 0x%lx\n", offset);
+				fprintf(stderr, "unknown chunk or chunk detection error\n");
 				ret = 1;
 				goto done_error;
 				break;
