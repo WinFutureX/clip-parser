@@ -5,7 +5,7 @@ A CLI-based parser for Clip Studio Paint files (.clip), written in C.
 ### Linux
 ``` sh
 $ cc -std=c89 -Wall -Werror clip.c -o clip
-$ ./clip <FILENAME>
+$ ./clip FILENAME
 ```
 ### Windows
 TBD
