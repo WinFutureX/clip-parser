@@ -8,4 +8,7 @@ $ cc -std=c89 -Wall -Werror clip.c -o clip
 $ ./clip FILENAME
 ```
 ### Windows
-TBD
+```bat
+cl clip.c /Fo:clip.obj /Fe:clip.exe /link ws2_32.lib
+clip.exe FILENAME
+```

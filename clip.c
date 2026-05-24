@@ -9,19 +9,38 @@
  
 #ifdef _MSC_VER
 #define _CRT_SECURE_NO_WARNINGS
+#pragma warning (push)
+#pragma warning (disable: 4295 4616 4761 5045)
 #endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+typedef unsigned __int8 uint8_t;
+typedef unsigned __int64 uint64_t;
+#define PRIu64 "llu"
+#define PRIX64 "llX"
+#include <winsock.h>
+#define FILE_OPEN _wfopen
+#define FILE_NAME_TYPE wchar_t
+#define FILE_NAME_FORMAT_SPECIFIER "%ls"
+#define FILE_OPEN_MODE L"rb"
+#else
 #include <stdint.h>
 #include <inttypes.h>
+#include <arpa/inet.h>
+#define FILE_OPEN fopen
+#define FILE_NAME_TYPE char
+#define FILE_NAME_FORMAT_SPECIFIER "%s"
+#define FILE_OPEN_MODE "rb"
+#endif
 
 /*
  * byte swap from big endian
  * https://stackoverflow.com/questions/3022552/is-there-any-standard-htonl-like-function-for-64-bits-integers-in-c
  */
-#include <arpa/inet.h>
 #define htonll(x) ((1 == htonl(1)) ? (x) : ((uint64_t) htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
 #define ntohll(x) ((1 == ntohl(1)) ? (x) : ((uint64_t) ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
 
@@ -37,18 +56,6 @@
  * total 80 bytes (not including mandatory "CHNKExta" data)
  */
 
-#ifdef _WIN32
-#define FILE_OPEN _wfopen
-#define FILE_NAME_TYPE wchar_t
-#define FILE_NAME_FORMAT_SPECIFIER "%ls"
-#define FILE_OPEN_MODE L"rb"
-#else
-#define FILE_OPEN fopen
-#define FILE_NAME_TYPE char
-#define FILE_NAME_FORMAT_SPECIFIER "%s"
-#define FILE_OPEN_MODE "rb"
-#endif
-
 #define CLIP_CHUNK_MAGIC_SIZE 8
 
 typedef enum clip_chunk_type
@@ -61,6 +68,9 @@ typedef enum clip_chunk_type
 	CLIP_CHUNK_CHNKFOOT
 } clip_chunk_type;
 
+#ifdef _MSC_VER
+#pragma pack(1)
+#endif
 static const char clip_csfchunk_magic[CLIP_CHUNK_MAGIC_SIZE] = "CSFCHUNK";
 static const char clip_chnkhead_magic[CLIP_CHUNK_MAGIC_SIZE] = "CHNKHead";
 static const char clip_chnkexta_magic[CLIP_CHUNK_MAGIC_SIZE] = "CHNKExta";
@@ -75,12 +85,6 @@ const char * clip_chnkexta_chunk_end = "B\0l\0o\0c\0k\0D\0a\0t\0a\0E\0n\0d\0C\0h
 const char * clip_chnkexta_chunk_status = "B\0l\0o\0c\0k\0S\0t\0a\0t\0u\0s\0";
 /* "BlockCheckSum" */
 const char * clip_chnkexta_chunk_checksum = "B\0l\0o\0c\0k\0C\0h\0e\0c\0k\0S\0u\0m\0";
-
-typedef struct file_info
-{
-	FILE * file;
-	size_t size;
-} file_info;
 
 /* file signature chunk */
 typedef struct clip_csfchunk
@@ -147,9 +151,9 @@ typedef struct clip_chnkfoot
 	uint64_t unknown;
 } clip_chnkfoot;
 
-static void dump_bytes(const uint8_t * bytes, size_t count)
+static void dump_bytes(const uint8_t * bytes, uint64_t count)
 {
-	size_t i;
+	uint64_t i;
 	for (i = 0; i < count; i++)
 	{
 		printf("%02X", bytes[i]);
@@ -168,45 +172,7 @@ static void dump_bytes(const uint8_t * bytes, size_t count)
 	printf("\n");
 }
 
-static file_info * file_open(const FILE_NAME_TYPE * filename)
-{
-	file_info * ret = (file_info *) malloc(sizeof(file_info));
-	if (!ret)
-	{
-		fprintf(stderr, "failed to allocate file info\n");
-		return NULL;
-	}
-	ret->file = FILE_OPEN(filename, FILE_OPEN_MODE);
-	if (!ret->file)
-	{
-		fprintf(stderr, "failed to open file\n");
-		free(ret);
-		return NULL;
-	}
-	if (fseek(ret->file, 0, SEEK_END) != 0)
-	{
-		fprintf(stderr, "failed to seek to end of file\n");
-		free(ret);
-		return NULL;
-	}
-	if (ftell(ret->file) == -1L)
-	{
-		fprintf(stderr, "failed to get file size\n");
-		free(ret);
-		return NULL;
-	}
-	ret->size = (size_t) ftell(ret->file);
-	rewind(ret->file);
-	return ret;
-}
-
-static void file_close(file_info * file)
-{
-	fclose(file->file);
-	free(file);
-}
-
-static clip_chunk_type detect_chunk(file_info * file)
+static clip_chunk_type detect_chunk(FILE * file)
 {
 	char tmp[CLIP_CHUNK_MAGIC_SIZE];
 	long prev_offset;
@@ -216,18 +182,18 @@ static clip_chunk_type detect_chunk(file_info * file)
 		fprintf(stderr, "file must not be NULL\n");
 		return CLIP_CHUNK_UNKNOWN_OR_ERROR;
 	}
-	prev_offset = ftell(file->file);
+	prev_offset = ftell(file);
 	if (prev_offset == -1)
 	{
 		perror("failed to retrieve previous file offset");
 		return CLIP_CHUNK_UNKNOWN_OR_ERROR;
 	}
-	if (fread(tmp, 1, sizeof(tmp), file->file) != sizeof(tmp))
+	if (fread(tmp, 1, sizeof(tmp), file) != sizeof(tmp))
 	{
 		fprintf(stderr, "failed to read header magic from file\n");
 		return CLIP_CHUNK_UNKNOWN_OR_ERROR;
 	}
-	if (fseek(file->file, prev_offset, SEEK_SET) != 0)
+	if (fseek(file, prev_offset, SEEK_SET) != 0)
 	{
 		fprintf(stderr, "failed to seek file to previous position\n");
 		return CLIP_CHUNK_UNKNOWN_OR_ERROR;
@@ -255,7 +221,7 @@ static clip_chunk_type detect_chunk(file_info * file)
 	return ret;
 }
 
-static clip_csfchunk * alloc_clip_csfchunk(file_info * file)
+static clip_csfchunk * alloc_clip_csfchunk(FILE * file)
 {
 	clip_csfchunk * ret;
 	if (!file)
@@ -269,7 +235,7 @@ static clip_csfchunk * alloc_clip_csfchunk(file_info * file)
 		fprintf(stderr, "failed to allocate CSFCHUNK buffer\n");
 		return NULL;
 	}
-	if (fread(ret, 1, sizeof(clip_csfchunk), file->file) != sizeof(clip_csfchunk))
+	if (fread(ret, 1, sizeof(clip_csfchunk), file) != sizeof(clip_csfchunk))
 	{
 		fprintf(stderr, "failed to read CSFCHUNK data from file\n");
 		free(ret);
@@ -291,7 +257,7 @@ static void parse_clip_csfchunk(clip_csfchunk * csfchunk)
 	printf("CSFCHUNK offset: 0x%" PRIX64 "\n", csfchunk->offset);
 }
 
-static clip_chnkhead * alloc_clip_chnkhead(file_info * file)
+static clip_chnkhead * alloc_clip_chnkhead(FILE * file)
 {
 	clip_chnkhead * ret;
 	if (!file)
@@ -305,7 +271,7 @@ static clip_chnkhead * alloc_clip_chnkhead(file_info * file)
 		fprintf(stderr, "failed to allocate CHNKHead buffer\n");
 		return NULL;
 	}
-	if (fread(ret, 1, sizeof(clip_chnkhead), file->file) != sizeof(clip_chnkhead))
+	if (fread(ret, 1, sizeof(clip_chnkhead), file) != sizeof(clip_chnkhead))
 	{
 		fprintf(stderr, "failed to read CHNKHead data from file\n");
 		free(ret);
@@ -333,43 +299,43 @@ static void parse_clip_chnkhead(clip_chnkhead * chnkhead)
 	dump_bytes(chnkhead->unknown, sizeof(chnkhead->unknown));
 }
 
-static clip_chnkexta * alloc_clip_chnkexta(file_info * file)
+static clip_chnkexta * alloc_clip_chnkexta(FILE * file, uint64_t verify_file_size)
 {
 	clip_chnkexta * ret;
-	size_t offset;
+	uint64_t offset;
 	if (!file)
 	{
 		fprintf(stderr, "file must not be NULL\n");
 		return NULL;
 	}
-	offset = (size_t) ftell(file->file);
+	offset = (uint64_t) ftell(file);
 	ret = (clip_chnkexta *) malloc(sizeof(clip_chnkexta));
 	if (!ret)
 	{
 		fprintf(stderr, "failed to allocate CHNKExta buffer\n");
 		return NULL;
 	}
-	if (fread(ret, 1, sizeof(clip_chnkexta_base), file->file) != sizeof(clip_chnkexta_base))
+	if (fread(ret, 1, sizeof(clip_chnkexta_base), file) != sizeof(clip_chnkexta_base))
 	{
 		fprintf(stderr, "failed to read CHNKExta header from file\n");
 		free(ret);
 		return NULL;
 	}
 	ret->base.size = htonll(ret->base.size);
-	if (offset + sizeof(ret->base.magic) + sizeof(ret->base.size) + ret->base.size >= file->size)
+	if (offset + sizeof(ret->base.magic) + sizeof(ret->base.size) + ret->base.size >= verify_file_size)
 	{
 		fprintf(stderr, "length exceeds file size\n");
 		free(ret);
 		return NULL;
 	}
-	ret->data = (uint8_t *) malloc(ret->base.size);
+	ret->data = (uint8_t *) malloc((size_t) ret->base.size);
 	if (!ret->data)
 	{
 		fprintf(stderr, "failed to allocate CHNKExta data buffer\n");
 		free(ret);
 		return NULL;
 	}
-	if (fread(ret->data, 1, ret->base.size, file->file) != ret->base.size)
+	if (fread(ret->data, 1, (size_t) ret->base.size, file) != ret->base.size)
 	{
 		fprintf(stderr, "failed to read CHNKExta data from file\n");
 		free(ret->data);
@@ -387,49 +353,49 @@ static void free_clip_chnkexta(clip_chnkexta * chnkexta)
 
 static void parse_clip_chnkexta(clip_chnkexta * chnkexta)
 {
-	printf("CHNKExta length %" PRIu64 " (0x%"PRIX64")\n", chnkexta->base.size, chnkexta->base.size);
+	printf("CHNKExta length %" PRIu64 " (0x%" PRIX64 ")\n", chnkexta->base.size, chnkexta->base.size);
 #if NO_DUMP_BYTES != 1
 	dump_bytes(chnkexta->data, chnkexta->base.size);
 #endif
 }
 
-static clip_chnksqli * alloc_clip_chnksqli(file_info * file)
+static clip_chnksqli * alloc_clip_chnksqli(FILE * file, uint64_t verify_file_size)
 {
 	clip_chnksqli * ret;
-	size_t offset;
+	uint64_t offset;
 	if (!file)
 	{
 		fprintf(stderr, "file must not be NULL\n");
 		return NULL;
 	}
-	offset = (size_t) ftell(file->file);
+	offset = (uint64_t) ftell(file);
 	ret = (clip_chnksqli *) malloc(sizeof(clip_chnksqli));
 	if (!ret)
 	{
 		fprintf(stderr, "failed to allocate CHNKSQLi buffer\n");
 		return NULL;
 	}
-	if (fread(ret, 1, sizeof(clip_chnksqli_base), file->file) != sizeof(clip_chnksqli_base))
+	if (fread(ret, 1, sizeof(clip_chnksqli_base), file) != sizeof(clip_chnksqli_base))
 	{
 		fprintf(stderr, "failed to read CHNKSQLi header from file\n");
 		free(ret);
 		return NULL;
 	}
 	ret->base.size = htonll(ret->base.size);
-	if (offset + sizeof(ret->base.magic) + sizeof(ret->base.size) + ret->base.size >= file->size)
+	if (offset + sizeof(ret->base.magic) + sizeof(ret->base.size) + ret->base.size >= verify_file_size)
 	{
 		fprintf(stderr, "length exceeds file size\n");
 		free(ret);
 		return NULL;
 	}
-	ret->data = (uint8_t *) malloc(ret->base.size);
+	ret->data = (uint8_t *) malloc((size_t) ret->base.size);
 	if (!ret->data)
 	{
 		fprintf(stderr, "failed to allocate CHNKSQLi data buffer\n");
 		free(ret);
 		return NULL;
 	}
-	if (fread(ret->data, 1, ret->base.size, file->file) != ret->base.size)
+	if (fread(ret->data, 1, (size_t) ret->base.size, file) != ret->base.size)
 	{
 		fprintf(stderr, "failed to read CHNKSQLi data from file\n");
 		free(ret->data);
@@ -447,13 +413,13 @@ static void free_clip_chnksqli(clip_chnksqli * chnksqli)
 
 static void parse_clip_chnksqli(clip_chnksqli * chnksqli)
 {
-	printf("CHNKSQLi length %" PRIu64 " (0x%"PRIX64")\n", chnksqli->base.size, chnksqli->base.size);
+	printf("CHNKSQLi length %" PRIu64 " (0x%" PRIX64 ")\n", chnksqli->base.size, chnksqli->base.size);
 #if NO_DUMP_BYTES != 1
 	dump_bytes(chnksqli->data, chnksqli->base.size);
 #endif
 }
 
-static clip_chnkfoot * alloc_clip_chnkfoot(file_info * file)
+static clip_chnkfoot * alloc_clip_chnkfoot(FILE * file)
 {
 	clip_chnkfoot * ret;
 	if (!file)
@@ -467,7 +433,7 @@ static clip_chnkfoot * alloc_clip_chnkfoot(file_info * file)
 		fprintf(stderr, "failed to allocate CHNKFoot buffer\n");
 		return NULL;
 	}
-	if (fread(ret, 1, sizeof(clip_chnkfoot), file->file) != sizeof(clip_chnkfoot))
+	if (fread(ret, 1, sizeof(clip_chnkfoot), file) != sizeof(clip_chnkfoot))
 	{
 		fprintf(stderr, "failed to read CHNKFoot header from file\n");
 		free(ret);
@@ -493,20 +459,35 @@ int wmain(int argc, wchar_t ** argv)
 int main(int argc, char ** argv)
 #endif
 {
-	file_info * file;
-	size_t offset;
+	FILE * file;
+	uint64_t file_size;
+	uint64_t offset;
 	int ret;
 	if (argc < 2)
 	{
 		fprintf(stderr, "usage: " FILE_NAME_FORMAT_SPECIFIER " FILE\n", argv[0]);
 		return 2;
 	}
-	file = file_open(argv[1]);
+	file = FILE_OPEN(argv[1], FILE_OPEN_MODE);
 	if (!file)
 	{
 		fprintf(stderr, "unable to open file " FILE_NAME_FORMAT_SPECIFIER "\n", argv[1]);
 		return 1;
 	}
+	if (fseek(file, 0, SEEK_END) != 0)
+	{
+		fprintf(stderr, "failed to seek to end of file\n");
+		ret = 1;
+		goto done_error;
+	}
+	if (ftell(file) == -1L)
+	{
+		fprintf(stderr, "failed to get file size\n");
+		ret = 1;
+		goto done_error;
+	}
+	file_size = (uint64_t) ftell(file);
+	rewind(file);
 	for (;;)
 	{
 		static clip_csfchunk * csfchunk;
@@ -514,13 +495,19 @@ int main(int argc, char ** argv)
 		static clip_chnkexta * chnkexta;
 		static clip_chnksqli * chnksqli;
 		static clip_chnkfoot * chnkfoot;
-		offset = (size_t) ftell(file->file);
-		if (offset == file->size)
+		offset = (uint64_t) ftell(file);
+		if (offset == file_size)
 		{
 			printf("end of file reached\n");
 			break;
 		}
-		printf("current offset 0x%lX\n", offset);
+		if (offset == -1L)
+		{
+			fprintf(stderr, "failed to get file offset\n");
+			ret = 1;
+			goto done_error;
+		}
+		printf("current offset 0x%" PRIX64 "\n", offset);
 		switch (detect_chunk(file))
 		{
 			case CLIP_CHUNK_CSFCHUNK:
@@ -552,7 +539,7 @@ int main(int argc, char ** argv)
 				}
 				break;
 			case CLIP_CHUNK_CHNKEXTA:
-				chnkexta = alloc_clip_chnkexta(file);
+				chnkexta = alloc_clip_chnkexta(file, file_size);
 				if (chnkexta)
 				{
 					parse_clip_chnkexta(chnkexta);
@@ -566,7 +553,7 @@ int main(int argc, char ** argv)
 				}
 				break;
 			case CLIP_CHUNK_CHNKSQLI:
-				chnksqli = alloc_clip_chnksqli(file);
+				chnksqli = alloc_clip_chnksqli(file, file_size);
 				if (chnksqli)
 				{
 					parse_clip_chnksqli(chnksqli);
@@ -593,6 +580,7 @@ int main(int argc, char ** argv)
 					goto done_error;
 				}
 				break;
+			case CLIP_CHUNK_UNKNOWN_OR_ERROR:
 			default:
 				fprintf(stderr, "unknown chunk or chunk detection error\n");
 				ret = 1;
@@ -602,6 +590,9 @@ int main(int argc, char ** argv)
 	}
 	ret = 0;
 done_error:
-	file_close(file);
+	fclose(file);
 	return ret;
 }
+#ifdef _MSC_VER
+#pragma warning (pop)
+#endif
